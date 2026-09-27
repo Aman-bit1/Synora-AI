@@ -23,9 +23,9 @@ env:
 
 jobs:
 
-  # --------------------------------------------------
+  # ==================================================
   # Detect which backend services changed
-  # --------------------------------------------------
+  # ==================================================
   detect-changes:
     name: Detect backend changes
     runs-on: ubuntu-latest
@@ -34,7 +34,6 @@ jobs:
       services: ${{ steps.detect.outputs.services }}
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
@@ -51,7 +50,6 @@ jobs:
 
           BASE_SHA="${{ github.event.before }}"
 
-          # First push / unusual event
           if [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
             CHANGED_FILES="$(git diff --name-only HEAD^ HEAD)"
           else
@@ -61,7 +59,7 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
-          # If the workflow itself changes, deploy all services.
+          # If workflow itself changes, deploy all services
           if echo "$CHANGED_FILES" | grep -q "^\.github/workflows/backend-deploy.yml$"; then
             echo 'services=["agent","auth","billing","chat","gateway"]' >> "$GITHUB_OUTPUT"
             exit 0
@@ -71,19 +69,18 @@ jobs:
 
           for SERVICE in agent auth billing chat gateway; do
 
-            if echo "$CHANGED_FILES" | grep -qE "^backend/${SERVICE}/"; then
+            if echo "$CHANGED_FILES" | grep -qE "^backend/services/${SERVICE}/"; then
               SERVICES+=("$SERVICE")
               continue
             fi
 
-            if echo "$CHANGED_FILES" | grep -qE "^backend/services/${SERVICE}/"; then
+            if echo "$CHANGED_FILES" | grep -qE "^backend/${SERVICE}/"; then
               SERVICES+=("$SERVICE")
               continue
             fi
 
           done
 
-          # Build JSON array
           if [ ${#SERVICES[@]} -eq 0 ]; then
             echo 'services=[]' >> "$GITHUB_OUTPUT"
           else
@@ -91,15 +88,16 @@ jobs:
             for SERVICE in "${SERVICES[@]}"; do
               JSON="${JSON}\"${SERVICE}\","
             done
+
             JSON="${JSON%,}]"
 
             echo "services=$JSON" >> "$GITHUB_OUTPUT"
           fi
 
 
-  # --------------------------------------------------
-  # Build + deploy changed services
-  # --------------------------------------------------
+  # ==================================================
+  # Build and deploy changed services
+  # ==================================================
   deploy:
     name: Deploy ${{ matrix.service }}
     needs: detect-changes
@@ -123,8 +121,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
+
       # ------------------------------------------------
-      # AWS credentials
+      # Configure AWS
       # ------------------------------------------------
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.3.0
@@ -133,12 +132,14 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+
       # ------------------------------------------------
       # Login to ECR
       # ------------------------------------------------
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+
 
       # ------------------------------------------------
       # Service configuration
@@ -191,6 +192,7 @@ jobs:
 
           esac
 
+
       # ------------------------------------------------
       # Find Docker build context
       # ------------------------------------------------
@@ -200,25 +202,26 @@ jobs:
         run: |
           SERVICE="${{ matrix.service }}"
 
-          if [ -f "backend/$SERVICE/Dockerfile" ]; then
-            echo "context=backend/$SERVICE" >> "$GITHUB_OUTPUT"
-            echo "Found backend/$SERVICE"
-
-          elif [ -f "backend/services/$SERVICE/Dockerfile" ]; then
-            echo "context=backend/services/$SERVICE" >> "$GITHUB_OUTPUT"
+          if [ -f "backend/services/$SERVICE/Dockerfile" ]; then
+            echo "BUILD_CONTEXT=backend/services/$SERVICE" >> "$GITHUB_OUTPUT"
             echo "Found backend/services/$SERVICE"
+
+          elif [ -f "backend/$SERVICE/Dockerfile" ]; then
+            echo "BUILD_CONTEXT=backend/$SERVICE" >> "$GITHUB_OUTPUT"
+            echo "Found backend/$SERVICE"
 
           else
             echo "Dockerfile not found for $SERVICE"
             echo ""
             echo "Checked:"
-            echo "  backend/$SERVICE/Dockerfile"
             echo "  backend/services/$SERVICE/Dockerfile"
+            echo "  backend/$SERVICE/Dockerfile"
             exit 1
           fi
 
+
       # ------------------------------------------------
-      # Build + push Docker image
+      # Build and push Docker image
       # ------------------------------------------------
       - name: Build and push image
         id: image
@@ -226,30 +229,33 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ steps.config.outputs.ECR_REPOSITORY }}
-          DOCKER_CONTEXT: ${{ steps.context.outputs.context }}
+          BUILD_CONTEXT: ${{ steps.context.outputs.BUILD_CONTEXT }}
           IMAGE_TAG: ${{ github.sha }}
+
         run: |
           IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-          echo "Building:"
+          echo "Building image:"
           echo "$IMAGE"
 
           docker build \
-            -f "$DOCKER_CONTEXT/Dockerfile" \
+            -f "$BUILD_CONTEXT/Dockerfile" \
             -t "$IMAGE" \
-            "$DOCKER_CONTEXT"
+            "$BUILD_CONTEXT"
 
           docker push "$IMAGE"
 
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
+
       # ------------------------------------------------
-      # Get the current ECS task definition
+      # Download current ECS task definition
       # ------------------------------------------------
       - name: Download current ECS task definition
         shell: bash
         env:
           TASK_FAMILY: ${{ steps.config.outputs.TASK_FAMILY }}
+
         run: |
           aws ecs describe-task-definition \
             --task-definition "$TASK_FAMILY" \
@@ -257,14 +263,18 @@ jobs:
             --output json \
             > current-task-definition.json
 
+          echo "Current task definition downloaded."
+
+
       # ------------------------------------------------
-      # Replace ONLY the Docker image
+      # Change ONLY the container image
       # ------------------------------------------------
       - name: Update image in task definition
         shell: bash
         env:
           CONTAINER_NAME: ${{ steps.config.outputs.CONTAINER_NAME }}
           NEW_IMAGE: ${{ steps.image.outputs.image }}
+
         run: |
           jq \
             --arg container "$CONTAINER_NAME" \
@@ -293,8 +303,11 @@ jobs:
             current-task-definition.json \
             > new-task-definition.json
 
+          echo "Task definition updated."
+
+
       # ------------------------------------------------
-      # Register new ECS task-definition revision
+      # Register new ECS revision
       # ------------------------------------------------
       - name: Register new ECS task definition
         id: register
@@ -309,33 +322,39 @@ jobs:
 
           echo "task_definition=$TASK_DEFINITION_ARN" >> "$GITHUB_OUTPUT"
 
-          echo "Registered:"
+          echo "Registered task definition:"
           echo "$TASK_DEFINITION_ARN"
 
+
       # ------------------------------------------------
-      # Update ECS service
+      # Deploy to ECS
       # ------------------------------------------------
       - name: Deploy to ECS
         shell: bash
         env:
           ECS_SERVICE: ${{ steps.config.outputs.ECS_SERVICE }}
           TASK_DEFINITION: ${{ steps.register.outputs.task_definition }}
+
         run: |
           aws ecs update-service \
             --cluster "$ECS_CLUSTER" \
             --service "$ECS_SERVICE" \
             --task-definition "$TASK_DEFINITION"
 
+          echo "ECS service updated."
+
+
       # ------------------------------------------------
-      # Wait for ECS deployment
+      # Wait for deployment
       # ------------------------------------------------
       - name: Wait for service stability
         shell: bash
         env:
           ECS_SERVICE: ${{ steps.config.outputs.ECS_SERVICE }}
+
         run: |
           aws ecs wait services-stable \
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE"
 
-          echo "Deployment completed for $ECS_SERVICE"
+          echo "Deployment completed successfully for $ECS_SERVICE."
