@@ -1,0 +1,29 @@
+# Dependencies
+**/node_modules/
+
+# Environment files
+**/.env
+**/.env.*
+!.env.example
+
+# Build output
+**/dist/
+**/build/
+
+# Secrets
+**/serviceAccountKey.json
+
+# Logs
+*.log
+
+# Backup / recovery folders
+backend_backup/
+backend_old/
+frontend_backup/
+frontend_old/
+recovery/
+
+# Editor / OS files
+.vscode/
+.DS_Store
+Thumbs.db
