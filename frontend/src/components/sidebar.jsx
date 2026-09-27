@@ -193,8 +193,9 @@ function SideBar({
                     inset-y-0 left-0
                     z-50
                     w-[270px]
-                    h-screen
+                    h-dvh
                     shrink-0
+                    overflow-hidden
                     bg-[#0b0d10]
                     border-r border-white/[0.06]
 
@@ -213,7 +214,7 @@ function SideBar({
                 `}
             >
 
-                <div className="flex flex-col h-full">
+                <div className="flex flex-col h-full min-h-0">
 
                     {/* HEADER */}
 
@@ -252,9 +253,9 @@ function SideBar({
                         {/* PLAN BADGE */}
 
                         <span className="text-[10px] font-medium text-slate-400 bg-white/[0.04] border border-white/[0.08] px-2 py-0.5 rounded-full tracking-wide">
-                           {userData?.plan
-                                            ? `${userData.plan.charAt(0).toUpperCase()}${userData.plan.slice(1)} Plan`
-                                            : "Free"}
+                            {userData?.plan
+                                ? `${userData.plan.charAt(0).toUpperCase()}${userData.plan.slice(1)} Plan`
+                                : "Free"}
                         </span>
 
                         {/* NEW CHAT ICON */}

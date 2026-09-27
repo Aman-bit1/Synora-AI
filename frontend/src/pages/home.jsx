@@ -216,7 +216,7 @@ const App = () => {
                         <div className="text-center mb-10">
 
                             <h1 className="font-serif text-[2rem] leading-none tracking-tight text-[#EDEAE2]">
-                                CortextAI
+                                Synora
                             </h1>
 
                             <p className="mt-3 text-sm text-[#EDEAE2]/50">
