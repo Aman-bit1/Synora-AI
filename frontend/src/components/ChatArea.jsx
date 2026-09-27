@@ -209,7 +209,7 @@ const ChatArea = ({
                 </button>
 
                 <span className="text-sm font-medium text-slate-200">
-                    CortexAI
+                    SynoraAI
                 </span>
 
             </div>
