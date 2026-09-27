@@ -24,7 +24,7 @@ env:
 jobs:
 
   # ==================================================
-  # Detect which backend services changed
+  # Detect which backend services need deployment
   # ==================================================
   detect-changes:
     name: Detect backend changes
@@ -34,6 +34,7 @@ jobs:
       services: ${{ steps.detect.outputs.services }}
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
@@ -43,6 +44,7 @@ jobs:
         id: detect
         shell: bash
         run: |
+          # Manual workflow = deploy everything
           if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
             echo 'services=["agent","auth","billing","chat","gateway"]' >> "$GITHUB_OUTPUT"
             exit 0
@@ -59,8 +61,14 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
-          # If workflow itself changes, deploy all services
+          # If workflow changed, deploy all services
           if echo "$CHANGED_FILES" | grep -q "^\.github/workflows/backend-deploy.yml$"; then
+            echo 'services=["agent","auth","billing","chat","gateway"]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # If shared backend code changes, deploy all services
+          if echo "$CHANGED_FILES" | grep -q "^backend/shared/"; then
             echo 'services=["agent","auth","billing","chat","gateway"]' >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -85,6 +93,7 @@ jobs:
             echo 'services=[]' >> "$GITHUB_OUTPUT"
           else
             JSON="["
+
             for SERVICE in "${SERVICES[@]}"; do
               JSON="${JSON}\"${SERVICE}\","
             done
@@ -194,28 +203,37 @@ jobs:
 
 
       # ------------------------------------------------
-      # Find Docker build context
+      # Find Dockerfile
+      # Build context is always backend/
       # ------------------------------------------------
-      - name: Find Docker build context
+      - name: Find Dockerfile
         id: context
         shell: bash
         run: |
           SERVICE="${{ matrix.service }}"
 
           if [ -f "backend/services/$SERVICE/Dockerfile" ]; then
-            echo "BUILD_CONTEXT=backend/services/$SERVICE" >> "$GITHUB_OUTPUT"
-            echo "Found backend/services/$SERVICE"
+            echo "DOCKERFILE=backend/services/$SERVICE/Dockerfile" >> "$GITHUB_OUTPUT"
+            echo "BUILD_CONTEXT=backend" >> "$GITHUB_OUTPUT"
+
+            echo "Dockerfile:"
+            echo "backend/services/$SERVICE/Dockerfile"
+
+            echo "Build context:"
+            echo "backend"
 
           elif [ -f "backend/$SERVICE/Dockerfile" ]; then
-            echo "BUILD_CONTEXT=backend/$SERVICE" >> "$GITHUB_OUTPUT"
-            echo "Found backend/$SERVICE"
+            echo "DOCKERFILE=backend/$SERVICE/Dockerfile" >> "$GITHUB_OUTPUT"
+            echo "BUILD_CONTEXT=backend" >> "$GITHUB_OUTPUT"
+
+            echo "Dockerfile:"
+            echo "backend/$SERVICE/Dockerfile"
+
+            echo "Build context:"
+            echo "backend"
 
           else
             echo "Dockerfile not found for $SERVICE"
-            echo ""
-            echo "Checked:"
-            echo "  backend/services/$SERVICE/Dockerfile"
-            echo "  backend/$SERVICE/Dockerfile"
             exit 1
           fi
 
@@ -226,20 +244,27 @@ jobs:
       - name: Build and push image
         id: image
         shell: bash
+
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ steps.config.outputs.ECR_REPOSITORY }}
+          DOCKERFILE: ${{ steps.context.outputs.DOCKERFILE }}
           BUILD_CONTEXT: ${{ steps.context.outputs.BUILD_CONTEXT }}
           IMAGE_TAG: ${{ github.sha }}
 
         run: |
           IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
-          echo "Building image:"
-          echo "$IMAGE"
+          echo "======================================"
+          echo "Building backend service"
+          echo "======================================"
+
+          echo "Dockerfile: $DOCKERFILE"
+          echo "Build context: $BUILD_CONTEXT"
+          echo "Image: $IMAGE"
 
           docker build \
-            -f "$BUILD_CONTEXT/Dockerfile" \
+            -f "$DOCKERFILE" \
             -t "$IMAGE" \
             "$BUILD_CONTEXT"
 
@@ -247,12 +272,15 @@ jobs:
 
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
+          echo "Image pushed successfully."
+
 
       # ------------------------------------------------
       # Download current ECS task definition
       # ------------------------------------------------
       - name: Download current ECS task definition
         shell: bash
+
         env:
           TASK_FAMILY: ${{ steps.config.outputs.TASK_FAMILY }}
 
@@ -263,14 +291,15 @@ jobs:
             --output json \
             > current-task-definition.json
 
-          echo "Current task definition downloaded."
+          echo "Current ECS task definition downloaded."
 
 
       # ------------------------------------------------
-      # Change ONLY the container image
+      # Replace ONLY the Docker image
       # ------------------------------------------------
       - name: Update image in task definition
         shell: bash
+
         env:
           CONTAINER_NAME: ${{ steps.config.outputs.CONTAINER_NAME }}
           NEW_IMAGE: ${{ steps.image.outputs.image }}
@@ -303,15 +332,16 @@ jobs:
             current-task-definition.json \
             > new-task-definition.json
 
-          echo "Task definition updated."
+          echo "New task definition prepared."
 
 
       # ------------------------------------------------
-      # Register new ECS revision
+      # Register new ECS task definition
       # ------------------------------------------------
       - name: Register new ECS task definition
         id: register
         shell: bash
+
         run: |
           TASK_DEFINITION_ARN=$(
             aws ecs register-task-definition \
@@ -322,15 +352,16 @@ jobs:
 
           echo "task_definition=$TASK_DEFINITION_ARN" >> "$GITHUB_OUTPUT"
 
-          echo "Registered task definition:"
+          echo "Registered:"
           echo "$TASK_DEFINITION_ARN"
 
 
       # ------------------------------------------------
-      # Deploy to ECS
+      # Update ECS service
       # ------------------------------------------------
       - name: Deploy to ECS
         shell: bash
+
         env:
           ECS_SERVICE: ${{ steps.config.outputs.ECS_SERVICE }}
           TASK_DEFINITION: ${{ steps.register.outputs.task_definition }}
@@ -345,10 +376,11 @@ jobs:
 
 
       # ------------------------------------------------
-      # Wait for deployment
+      # Wait for service stability
       # ------------------------------------------------
       - name: Wait for service stability
         shell: bash
+
         env:
           ECS_SERVICE: ${{ steps.config.outputs.ECS_SERVICE }}
 
@@ -357,4 +389,5 @@ jobs:
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE"
 
-          echo "Deployment completed successfully for $ECS_SERVICE."
+          echo "Deployment completed successfully."
+          echo "Service: $ECS_SERVICE"
