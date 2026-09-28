@@ -14,16 +14,22 @@ app.use(express.json());
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
-];
+  process.env.FRONTEND_URL?.replace(/\/$/, ""),
+].filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS"));
+      const requestOrigin = origin?.replace(/\/$/, "");
+
+      if (!requestOrigin || allowedOrigins.includes(requestOrigin)) {
+        return callback(null, true);
       }
+
+      console.log("CORS rejected:", requestOrigin);
+      console.log("Allowed origins:", allowedOrigins);
+
+      return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
   })
