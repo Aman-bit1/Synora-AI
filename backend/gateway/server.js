@@ -38,8 +38,32 @@ app.use(cookieParser());
 app.use(morgan("dev"))
 app.use("/api/auth", proxy(process.env.AUTH_SERVICE));
 app.use("/api/chat",protect, proxyWithHeader(process.env.CHAT_SERVICE)); //proxywithheader user to get the usersession id from protect function in middleware to use this chat service
-app.use("/api/agent",protect, proxyWithHeader(process.env.AGENT_SERVICE));
-app.use("/api/chat",protect, proxyWithHeader(process.env.CHAT_SERVICE));
+
+const agentNormalProxy = proxyWithHeader(
+    process.env.AGENT_SERVICE
+);
+
+const agentUploadProxy = proxyWithHeader(
+    process.env.AGENT_SERVICE,
+    {
+        parseReqBody: false
+    }
+);
+
+app.use(
+    "/api/agent",
+    protect,
+    (req, res, next) => {
+
+        // Stream image and PDF uploads directly
+        if (req.is("multipart/form-data")) {
+            return agentUploadProxy(req, res, next);
+        }
+
+        // Keep normal requests unchanged
+        return agentNormalProxy(req, res, next);
+    }
+);
 app.use("/api/billing",protect, proxyWithHeader(process.env.BILLING_SERVICE));
 app.use("/api/me", protect, getCurrentUser); ///it is used so that we can get user even after refreshing
 
